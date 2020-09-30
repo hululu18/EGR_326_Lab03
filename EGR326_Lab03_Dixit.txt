@@ -1,0 +1,186 @@
+
+/*------------------------------------------------
+*   Authors = Dixit Gurung
+*   EGR 326 901
+*   Date = 09/27/2020
+*   Lab_3
+*   Description: The purpose of this laboratory was to create a program in CCS for
+*   the MSP432 to interface with the ultrasonic sensor and led using TimerA capture and compare.
+*---------------------------------------------------*/
+
+
+//----------------------------------------------------- PART I AND PART II ------------------------------------------------------------
+
+#include "msp.h"
+#include <stdio.h>
+
+
+volatile uint16_t count = 0; //used in systick port handler
+unsigned short lastedge = 0, currentedge = 0, period = 0; //variables to calculate cycles from the echo pins using capture
+ int edge_flag = 1; //initially 1 becasue when the first interrupt on TA0 will be on rising edge
+//After that it will change accordingly
+ float distance = 0;                        // distance variable to be determined
+ PWMperiod = 6000; //Period is 26250 because CCR[0] = 26250 for TimerA2 (70ms period CLK/8) PWM for led is also generated using TIMERA2
+
+main(void)
+{
+    WDT_A->CTL = WDT_A_CTL_PW | WDT_A_CTL_HOLD;
+
+
+    TimerA_trig_Init();
+    TimerA_Capture_Init();
+    Led_pwm();
+
+    NVIC->ISER[0] = 1 << ((TA0_N_IRQn) & 31); // Enable interrupt in NVIC vector
+    __enable_irq();                           // Enable global interrupt
+    Led_pwm();
+    while (1)
+    {
+
+        //since I used 2N4401 transistor 0.1*period will be off time meaning 90% dutycycle
+        //In short it is opposite
+
+        if(distance <= 1){
+        TIMER_A1->CCR[2]   = 0.05*PWMperiod; //Max intensity for < 1 in
+        }
+
+        else if(distance <= 2){
+        TIMER_A1->CCR[2]   = (0.05 * PWMperiod); //2/10 max
+        }
+
+        else if(distance <= 3){
+        TIMER_A1->CCR[2]   = (0.95 * PWMperiod);//3/10 max
+        }
+
+        else if(distance <= 4){
+        TIMER_A1->CCR[2]   = (0.8 * PWMperiod);//4/10 max
+        }
+
+        else if(distance <= 5){
+        TIMER_A1->CCR[2]   = (0.6 * PWMperiod); // 5/10 max
+        }
+
+        else if(distance <= 6){
+        TIMER_A1->CCR[2]   = (0.4 * PWMperiod); // 6/10 max
+        }
+
+        else if(distance <= 7)
+        {
+        TIMER_A1->CCR[2]   = (0.3 * PWMperiod); // 7/10 max
+        }
+
+        else if(distance <= 8){
+        TIMER_A1->CCR[2]   = (0.2 * PWMperiod); // 8/10 max
+        }
+
+        else if(distance <= 9){
+        TIMER_A1->CCR[2]   = (0.1 * PWMperiod); //9/10 max
+        }
+
+        else if(distance >= 9){
+        TIMER_A1->CCR[2]   = (PWMperiod); //greater than 9 inch will turn off the led
+        }
+
+}
+}
+
+//This function generates pulse for trig pin of sensor and also generates pwm for led
+void TimerA_trig_Init(void)
+{
+    //P5.7  outputs pulse for trig pin
+    //setup P5.7 as an Timer A2.2 controlled OUTPUT, SEL = 01
+    P5->SEL0 |= BIT7;
+    P5->SEL1 &= ~ BIT7;
+    P5->DIR |= BIT7;
+
+
+    TIMER_A2->CCR[0] = 26250; //70ms period SMCLK CLK/8
+    TIMER_A2->CCR[2] = 5; //10us ON time SMCLK CLK/8
+
+
+    TIMER_A2->CCTL[2] = TIMER_A_CCTLN_OUTMOD_3;    // Reset/set
+
+    TIMER_A2->CTL = TIMER_A_CTL_TASSEL_2 |         // SMCLK
+                    TIMER_A_CTL_ID_3|              //divide CLK by 8
+                    TIMER_A_CTL_MC_1 |             // Up Mode ... Count up
+                    TIMER_A_CTL_CLR;               // clear TA0R Register
+
+
+}
+
+
+
+
+void TimerA_Capture_Init(void)
+{
+
+       P2->SEL0 |= BIT4;            // TA0.1 input capture pin, second function
+       P2->SEL1 &= ~ BIT4;          // TA0.1 input capture pin, second function
+       P2->DIR &= ~ BIT4;
+
+       TIMER_A0->CTL |= TIMER_A_CTL_TASSEL_2 |       // Use SMCLK as clock source,
+               TIMER_A_CTL_MC_2 |            // Start timer in Continuous mode
+               TIMER_A_CTL_CLR;                      // clear TA0R
+
+       TIMER_A0->CCTL[1] = TIMER_A_CCTLN_CM_3 |         // Capture rising and falling edge,
+               TIMER_A_CCTLN_CCIS_0 |       // Use CCI2A
+               TIMER_A_CCTLN_CCIE |           // Enable capture interrupt
+               TIMER_A_CCTLN_CAP |           // Enable capture mode,
+               TIMER_A_CCTLN_SCS;               // Synchronous capture
+
+
+}
+
+
+void TA0_N_IRQHandler(void)
+{
+
+    //reads the value at rising edge
+    if (edge_flag)
+    {
+        lastedge = TIMER_A0->CCR[1];
+        edge_flag = 0;
+    }
+
+    //reads the value at falling edge and calculates no of cycles
+    else if (edge_flag == 0)
+    {
+        currentedge = TIMER_A0->CCR[1];
+        period = currentedge - lastedge;
+        edge_flag = 1;
+
+        distance = period;
+        distance = distance / (148 * 3);
+
+        printf("Distance = %f\n", distance); // prints distance into the monitor
+        //__delay_cycles(8000000);//2 sec delay for part II
+
+    }
+
+
+    TIMER_A0->CCTL[1] &= ~(TIMER_A_CCTLN_CCIFG);
+
+}
+
+//This function is setup for generating PWM for led
+void Led_pwm(void)
+
+{
+
+    P7->SEL0 |= BIT6;                             //sets up TimerA2.1 on P5.6
+
+    P7->SEL1 &= ~ BIT6;
+
+    P7->DIR |= BIT6;                              //outputs PWM signal
+
+    TIMER_A1->CCR[0] = 6000; //70ms period CLK/8
+    TIMER_A1->CCR[2] = .99*6000; //10us ON time CLK/8
+
+    TIMER_A1->CCTL[2] = TIMER_A_CCTLN_OUTMOD_3;    // Reset/set
+
+    TIMER_A1->CTL = TIMER_A_CTL_TASSEL_2 |         // SMCLK
+                    TIMER_A_CTL_ID_3 |              //divide CLK by 8
+                    TIMER_A_CTL_MC_1 |             // Up Mode ... Count up
+                    TIMER_A_CTL_CLR;               // clear TA0R Register
+}
+
